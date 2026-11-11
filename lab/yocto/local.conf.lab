@@ -1,0 +1,17 @@
+
+# LAB_MARK : configuration du lab (ajoutee une fois a conf/local.conf)
+MACHINE = "vexpress-qemu"
+DL_DIR = "/workdir/cache/downloads"
+SSTATE_DIR = "/workdir/cache/sstate"
+INHERIT += "mender-full cve-check"
+MENDER_ARTIFACT_NAME = "lab-1.0"
+DISTRO_FEATURES_append = " systemd"
+DISTRO_FEATURES_BACKFILL_CONSIDERED += "sysvinit"
+VIRTUAL-RUNTIME_init_manager = "systemd"
+VIRTUAL-RUNTIME_initscripts = ""
+# Artefacts Mender signes a la construction (cle hors depot)
+MENDER_ARTIFACT_SIGNING_KEY = "/workdir/keys/artifact-private.key"
+MENDER_ARTIFACT_VERIFY_KEY = "/workdir/keys/artifact-public.key"
+# Equivalent "CSF" du lab : signature des images a la fin du build (voir meta-lab-secure)
+IMAGE_CLASSES += "lab-sign"
+LAB_SIGN_KEY = "/workdir/keys/lab-sign.key"

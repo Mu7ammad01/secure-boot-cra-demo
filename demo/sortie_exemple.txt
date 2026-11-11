@@ -1,0 +1,147 @@
+Démo : chaîne de confiance embarquée (modèle pédagogique, signatures RSA réelles)
+  ..    génération des clés RSA-2048 (SRK x4, IMG, FIT, artefact, attaquant)...
+
+=== Scénario 1 : Démarrage nominal d'une carte CLOSED ==========================
+  ..    usine : SRK_HASH gravé = d9d65a8379aef87ad240dfe2... ; SEC_CONFIG = 1 (closed)
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ OK ] SPL     -> U-Boot   : u-boot.itb (CSF n2) authentifié (hash SRK = eFuses, signature valide)
+  ..    U-Boot : partition active A (version 1.0)
+  [ OK ] U-Boot -> FIT : signature de configuration valide
+  [ OK ] U-Boot -> FIT : hash de chaque image conforme
+  [ OK ] noyau -> dm-verity : 256 blocs lus et vérifiés jusqu'au root hash 9dca329c95d95ebc...
+  [ OK ] système démarré : version 1.0 sur la partition A
+
+=== Scénario 2 : Attaque : U-Boot remplacé par celui de l'attaquant. Carte CLOSED puis OPEN ==
+  -- carte CLOSED
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ALERTE] HAB event : signature de l'image invalide (CSF)
+  [REFUSÉ] SPL     -> U-Boot   : carte CLOSED, u-boot.itb (CSF n2) refusé, la ROM ne passe pas la main
+  -- carte OPEN
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ALERTE] HAB event : signature de l'image invalide (CSF)
+  [ALERTE] SPL     -> U-Boot   : carte OPEN, événement journalisé mais le démarrage continue (mode test)
+  ..    U-Boot : partition active A (version 6.6.6)
+  [ OK ] U-Boot -> FIT : signature de configuration valide
+  [ OK ] U-Boot -> FIT : hash de chaque image conforme
+  [ OK ] noyau -> dm-verity : 256 blocs lus et vérifiés jusqu'au root hash d9720d8764534d19...
+  [ OK ] système démarré : version 6.6.6 sur la partition A
+  [ALERTE] carte OPEN : le système de l'attaquant a démarré, rien ne l'a bloqué
+           En production la carte est closed : l'attaque s'arrête à la BootROM. En open, rien ne la bloque.
+
+=== Scénario 3 : Attaque : chaîne entièrement signée par l'attaquant (table SRK remplacée) ==
+           signatures internes cohérentes, mais la table SRK n'est pas celle dont le hash est dans les eFuses
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ALERTE] HAB event : SHA-256(table SRK de l'image) != SRK_HASH des eFuses
+  [REFUSÉ] SPL     -> U-Boot   : carte CLOSED, u-boot.itb (attaquant) refusé, la ROM ne passe pas la main
+
+=== Scénario 4 : Attaque : noyau modifié dans le FIT ===========================
+           un seul bit changé dans le noyau
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ OK ] SPL     -> U-Boot   : u-boot.itb (CSF n2) authentifié (hash SRK = eFuses, signature valide)
+  ..    U-Boot : partition active A (version 1.0)
+  [ OK ] U-Boot -> FIT : signature de configuration valide
+  [REFUSÉ] U-Boot -> FIT : hash de l'image 'kernel' incorrect
+
+=== Scénario 5 : Attaque 'mix and match' : noyau légitime + DTB légitime d'un autre produit ==
+  [ALERTE] contrôle naïf (hash de chaque image) : PASSE, l'attaque réussirait
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ OK ] SPL     -> U-Boot   : u-boot.itb (CSF n2) authentifié (hash SRK = eFuses, signature valide)
+  ..    U-Boot : partition active A (version 1.0)
+  [REFUSÉ] U-Boot -> FIT : signature de configuration invalide
+           chaque image est valide seule ; c'est la signature de CONFIGURATION qui interdit la combinaison
+
+=== Scénario 6 : Attaque : rootfs modifié. Puis l'attaquant recalcule l'arbre dm-verity ==
+  ..    un bit modifié dans le bloc 137 du rootfs
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ OK ] SPL     -> U-Boot   : u-boot.itb (CSF n2) authentifié (hash SRK = eFuses, signature valide)
+  ..    U-Boot : partition active A (version 1.0)
+  [ OK ] U-Boot -> FIT : signature de configuration valide
+  [ OK ] U-Boot -> FIT : hash de chaque image conforme
+  [REFUSÉ] noyau -> dm-verity : bloc 137 : hash incorrect au niveau 0 de l'arbre
+  ..    l'attaquant recalcule tout l'arbre : l'arbre est cohérent avec ses données
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ OK ] SPL     -> U-Boot   : u-boot.itb (CSF n2) authentifié (hash SRK = eFuses, signature valide)
+  ..    U-Boot : partition active A (version 1.0)
+  [ OK ] U-Boot -> FIT : signature de configuration valide
+  [ OK ] U-Boot -> FIT : hash de chaque image conforme
+  [REFUSÉ] noyau -> dm-verity : bloc 0 : l'arbre ne remonte pas au root hash signe (arbre recalcule ?)
+           le root hash est dans la configuration FIT signée : l'attaquant ne peut pas le changer
+
+=== Scénario 7 : Mise à jour Mender valide : 1.0 → 2.0 sur la partition B, puis commit ==
+  [ OK ] mender-client : signature de l'artefact valide
+  [ OK ] mender-client : charge utile conforme au manifeste signé
+  [ OK ] écrit sur la partition inactive B ; U-Boot : upgrade_available=1, bootcount=0 ; reboot
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ OK ] SPL     -> U-Boot   : u-boot.itb (CSF n2) authentifié (hash SRK = eFuses, signature valide)
+  ..    U-Boot : mise à jour en essai, bootcount=1 (limite 1)
+  ..    U-Boot : partition active B (version 2.0)
+  [ OK ] U-Boot -> FIT : signature de configuration valide
+  [ OK ] U-Boot -> FIT : hash de chaque image conforme
+  [ OK ] noyau -> dm-verity : 256 blocs lus et vérifiés jusqu'au root hash ce7160bd30fd3814...
+  [ OK ] mender-client : COMMIT, la partition B devient la référence
+  [ OK ] système démarré : version 2.0 sur la partition B
+
+=== Scénario 8 : Artefact falsifié : charge utile modifiée, puis re-signé par l'attaquant ==
+  -- (a) charge utile modifiée, manifeste d'origine
+  [ OK ] mender-client : signature de l'artefact valide
+  [REFUSÉ] mender-client : charge utile modifiée (hash différent du manifeste signé)
+  -- (b) l'attaquant re-signe le manifeste avec sa clé
+  [REFUSÉ] mender-client : signature de l'artefact invalide (clé publique de l'appareil)
+  ..    état de l'appareil inchangé : partition A, version 1.0
+
+=== Scénario 9 : Image signée mais défaillante : rollback automatique ==========
+  [ OK ] mender-client : signature de l'artefact valide
+  [ OK ] mender-client : charge utile conforme au manifeste signé
+  [ OK ] écrit sur la partition inactive B ; U-Boot : upgrade_available=1, bootcount=0 ; reboot
+  -- démarrage 1 (partition B)
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ OK ] SPL     -> U-Boot   : u-boot.itb (CSF n2) authentifié (hash SRK = eFuses, signature valide)
+  ..    U-Boot : mise à jour en essai, bootcount=1 (limite 1)
+  ..    U-Boot : partition active B (version 2.1)
+  [ OK ] U-Boot -> FIT : signature de configuration valide
+  [ OK ] U-Boot -> FIT : hash de chaque image conforme
+  [ OK ] noyau -> dm-verity : 256 blocs lus et vérifiés jusqu'au root hash cba1f271b2135e8b...
+  [ALERTE] userland : le service applicatif plante, la mise à jour n'est pas validée
+  -- démarrage 2 (reboot après échec)
+  [ OK ] BootROM -> SPL      : SPL (CSF n1) authentifié (hash SRK = eFuses, signature valide)
+  [ OK ] SPL     -> U-Boot   : u-boot.itb (CSF n2) authentifié (hash SRK = eFuses, signature valide)
+  ..    U-Boot : mise à jour en essai, bootcount=2 (limite 1)
+  [ALERTE] U-Boot : limite dépassée, ROLLBACK vers la partition A
+  ..    U-Boot : partition active A (version 1.0)
+  [ OK ] U-Boot -> FIT : signature de configuration valide
+  [ OK ] U-Boot -> FIT : hash de chaque image conforme
+  [ OK ] noyau -> dm-verity : 256 blocs lus et vérifiés jusqu'au root hash 9dca329c95d95ebc...
+  [ OK ] système démarré : version 1.0 sur la partition A
+
+=== Scénario 10 : Rejeu d'une ancienne version signée (anti-rollback, option de conception) ==
+           la signature est valide : seule une version minimale stockée sur l'appareil bloque le rejeu
+  [ OK ] mender-client : signature de l'artefact valide
+  [ OK ] mender-client : charge utile conforme au manifeste signé
+  [REFUSÉ] anti-rollback : version 0.9 < version minimale 1.0
+
+=== Scénario 11 : CRA : SBOM, CVE et délais de notification =====================
+  ..    SBOM d'exemple : 8 composants (option --sbom pour utiliser celui du build)
+  ..    avis DEMO-2026-0001 (avis FICTIF créé pour la démonstration) : composant concerné = 'openssl', exploité activement
+  [ALERTE] produit CONCERNÉ : openssl 1.1.1
+  Horloge CRA (à re-vérifier sur EUR-Lex) :
+  ..    T0  prise de connaissance        : 11/11 09:12
+  ..    T0 + 24 h  alerte précoce        : avant 12/11 09:12
+  ..    T0 + 72 h  notification complète : avant 14/11 09:12
+  ..    rapport final : environ 14 jours après la disponibilité du correctif
+  [ OK ] correctif : artefact Mender signé (scénario 7), déploiement sans intervention sur site
+
+=== Bilan ========================================================
+   #  Scénario                             Attendu                              Résultat
+   1  Démarrage nominal                    boot OK                              CONFORME
+   2  U-Boot remplacé (closed / open)      refusé en closed, toléré en open     CONFORME
+   3  Chaîne signée par l'attaquant        refusé : hash SRK                    CONFORME
+   4  Noyau modifié (FIT)                  refusé : hash image                  CONFORME
+   5  Mix and match (FIT)                  refusé : signature de configuration  CONFORME
+   6  Rootfs modifié (dm-verity)           refusé : root hash                   CONFORME
+   7  Mise à jour valide (Mender)          boot B + commit                      CONFORME
+   8  Artefact falsifié (Mender)           refusé avant écriture                CONFORME
+   9  Image défaillante (Mender)           rollback vers A                      CONFORME
+  10  Rejeu ancienne version               refusé : anti-rollback               CONFORME
+  11  CRA : SBOM + délais                  exposition + horloge 24 h / 72 h     CONFORME
+
+  Tous les scénarios se comportent comme attendu.
